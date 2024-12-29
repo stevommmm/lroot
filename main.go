@@ -71,11 +71,11 @@ func remount() {
 	// Recursive private
 	log.Println("priv root", syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""))
 
-	log.Println("bind", syscall.Mount("/", "/tmp/root/", "none", syscall.MS_REC|syscall.MS_BIND, ""))
+	log.Println("bind", syscall.Mount("/", root, "none", syscall.MS_REC|syscall.MS_BIND, ""))
 	// Remount for RO
-	log.Println("bind", syscall.Mount("", "/tmp/root/", "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""))
+	log.Println("bind", syscall.Mount("", root, "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""))
 
-	log.Println("chrot", syscall.Chroot("/tmp/root/"))
+	log.Println("chrot", syscall.Chroot(root))
 
 	log.Println("overlay", syscall.Mount("overlay", "/", "overlay", 0, opts))
 	log.Println("proc", syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""))
