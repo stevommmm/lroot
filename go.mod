@@ -2,4 +2,4 @@ module github.com/stevommmm/local
 
 go 1.23.3
 
-require golang.org/x/sys v0.28.0
+require github.com/seccomp/libseccomp-golang v0.10.0

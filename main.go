@@ -1,14 +1,100 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path"
+	"slices"
+	"strings"
 	"syscall"
+
+	libseccomp "github.com/seccomp/libseccomp-golang"
 )
+
+var ignoremounts []string = []string{
+	"sysfs",
+	"tmpfs",
+	"bdev",
+	"proc",
+	"cgroup",
+	"cgroup2",
+	"devtmpfs",
+	"binfmt_misc",
+	"configfs",
+	"debugfs",
+	"tracefs",
+	"securityfs",
+	"sockfs",
+	"bpf",
+	"pipefs",
+	"ramfs",
+	"hugetlbfs",
+	"devpts",
+	"autofs",
+	"fuseblk",
+	"fuse",
+	"fuse.portal",
+	"fuse.gvfsd-fuse",
+	"fusectl",
+	"virtiofs",
+	"efivarfs",
+	"mqueue",
+	"pstore",
+}
+
+func read_mountinfo() []string {
+	ret := []string{}
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return ret
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), " ")
+		if len(parts) >= 7 && parts[4] != "/" && !slices.Contains(ignoremounts, parts[7]) {
+			ret = append(ret, parts[4])
+			log.Println(parts[4], parts[7])
+		}
+	}
+	return ret
+}
+
+func disallowmount() {
+	mount_syscalls := []string{
+		"chroot",
+		"fsconfig",
+		"fsmount",
+		"fsopen",
+		"fspick",
+		"mount",
+		"mount_setattr",
+		"move_mount",
+		"open_tree",
+		"pivot_root",
+		"umount",
+		"umount2",
+	}
+
+	filter, err := libseccomp.NewFilter(libseccomp.ActAllow.SetReturnCode(int16(syscall.EPERM)))
+	if err != nil {
+		fmt.Printf("Error creating filter: %s\n", err)
+	}
+	for _, element := range mount_syscalls {
+		syscallID, err := libseccomp.GetSyscallFromName(element)
+		if err != nil {
+			log.Fatal(err)
+		}
+		filter.AddRule(syscallID, libseccomp.ActErrno)
+	}
+	filter.Load()
+	log.Println("Blocked mounting with seccomp")
+}
 
 func drop_to_userns() {
 	log.Println("User namespace")
@@ -50,35 +136,27 @@ func drop_to_userns() {
 func remount() {
 	log.Println("Remounting")
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	root := path.Join(cwd, ".local/root")
-	upper := path.Join(cwd, ".local/upper")
-	work := path.Join(cwd, ".local/work")
-
-	opts := fmt.Sprintf(
-		"lowerdir=/,upperdir=%s,workdir=%s,userxattr",
-		upper, work)
-
-	_ = os.MkdirAll(root, 0755)
-	_ = os.MkdirAll(upper, 0755)
-	_ = os.MkdirAll(work, 0755)
-	log.Println(opts)
+	root, _ := os.MkdirTemp("", "overlay-root-*")
+	defer os.RemoveAll(root) // clean up
 
 	// Recursive private
 	log.Println("priv root", syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""))
+	filesystems := read_mountinfo()
 
 	log.Println("bind", syscall.Mount("/", root, "none", syscall.MS_REC|syscall.MS_BIND, ""))
 	// Remount for RO
-	log.Println("bind", syscall.Mount("", root, "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""))
+	log.Println("ro", syscall.Mount("", root, "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""))
 
-	log.Println("chrot", syscall.Chroot(root))
+	for _, fs := range filesystems {
+		log.Println("ro", fs, syscall.Mount("", path.Join(root, fs), "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""))
+	}
 
-	log.Println("overlay", syscall.Mount("overlay", "/", "overlay", 0, opts))
+	// log.Println("overlay", syscall.Mount("overlay", root, "overlay", syscall.MS_NOATIME, opts))
+
+	log.Println("chroot", syscall.Chroot(root))
 	log.Println("proc", syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""))
+
+	disallowmount()
 
 	cmd := exec.Command("/bin/bash", flag.Args()...)
 
@@ -87,6 +165,7 @@ func remount() {
 	cmd.Stderr = os.Stderr
 	cmd.Run()
 }
+
 
 func main() {
 	flag.Parse()
