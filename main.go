@@ -3,11 +3,11 @@ package main
 import (
 	"bufio"
 	"flag"
-	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -26,6 +26,7 @@ var bindmountfstypes []string = []string{
 	"vfat",
 }
 
+// Read over the namespace mounts looking for known filesystems to bring across
 func read_mountinfo() []string {
 	ret := []string{}
 	f, err := os.Open("/proc/self/mountinfo")
@@ -37,7 +38,7 @@ func read_mountinfo() []string {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		parts := strings.Split(scanner.Text(), " ")
-		if len(parts) >= 7 && parts[4] != "/" && slices.Contains(bindmountfstypes, parts[7]) {
+		if len(parts) >= 8 && parts[4] != "/" && slices.Contains(bindmountfstypes, parts[8]) {
 			ret = append(ret, parts[4])
 		}
 	}
@@ -62,7 +63,7 @@ func disallowmount() {
 
 	filter, err := libseccomp.NewFilter(libseccomp.ActAllow.SetReturnCode(int16(syscall.EPERM)))
 	if err != nil {
-		fmt.Printf("Error creating filter: %s\n", err)
+		log.Fatal("Error creating filter: %s\n", err)
 	}
 	filter.SetNoNewPrivsBit(false) // allow sudo inside but still filter mount
 	for _, element := range mount_syscalls {
@@ -73,11 +74,11 @@ func disallowmount() {
 		filter.AddRule(syscallID, libseccomp.ActErrno)
 	}
 	filter.Load()
-	log.Println("Blocked mounting with seccomp")
 }
 
+// Reexecute our binary with the parsed args but put the sibling in
+// a new mount namespace
 func drop_to_userns(root string, uid, gid uint64) {
-	log.Println("User namespace")
 	cmd := exec.Command("/proc/self/exe", "--stage2", "-chroot", root,
 		"-sudo-uid", strconv.FormatUint(uid, 10), "-sudo-gid", strconv.FormatUint(gid, 10),
 	)
@@ -95,14 +96,6 @@ func drop_to_userns(root string, uid, gid uint64) {
 }
 
 func isolate(root string, sudo_uid, sudo_gid uint32) string {
-	// runtime.LockOSThread()
-	// defer runtime.UnlockOSThread()
-
-	// unix.Unshare(unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS)
-
-	// log.Println("priv root", syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""))
-	log.Println("Overlay:", root)
-
 	newroot := filepath.Join(root, "root")
 	upperdir := filepath.Join(root, "up")
 	workdir := filepath.Join(root, "work")
@@ -148,34 +141,59 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 
 	for _, fs := range filesystems {
 		os.MkdirAll(filepath.Join(newroot, fs), 0700)
-		log.Println("bind", fs, syscall.Mount(fs, filepath.Join(newroot, fs), "", syscall.MS_BIND, ""))
-		log.Println("ro-bind", fs, syscall.Mount("", filepath.Join(newroot, fs), "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""))
+		
+		if err := syscall.Mount(fs, filepath.Join(newroot, fs), "", syscall.MS_BIND, ""); err == nil {
+			// Remount readonly - cant be done in one step for some reason
+			if err := syscall.Mount("", filepath.Join(newroot, fs), "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""); err == nil {
+				defer unix.Unmount(filepath.Join(newroot, fs), syscall.MNT_DETACH)
+			}
+		}
 	}
 
 	// Bring in needed devices as binds
-	log.Println("dev", syscall.Mount("/dev", filepath.Join(newroot, "/dev"), "", syscall.MS_BIND, ""))
-	defer unix.Unmount("/dev", unix.MNT_DETACH)
-	log.Println("devpts", syscall.Mount("/dev/pts", filepath.Join(newroot, "/dev/pts"), "", syscall.MS_BIND, ""))
-	defer unix.Unmount("/dev/pts", unix.MNT_DETACH)
+	if err := syscall.Mount("/dev", filepath.Join(newroot, "/dev"), "", syscall.MS_BIND, ""); err == nil {
+		defer unix.Unmount("/dev", unix.MNT_DETACH)
+	}
+	if err := syscall.Mount("/dev/pts", filepath.Join(newroot, "/dev/pts"), "", syscall.MS_BIND, ""); err == nil {
+		defer unix.Unmount("/dev/pts", unix.MNT_DETACH)
+	}
 
-	// os.MkdirAll(filepath.Join(newroot, "old"), 0700)
-	// if err := unix.PivotRoot(newroot, filepath.Join(newroot, "old")); err != nil {
-	// 	log.Fatal(err)
-	// }
-
+	// Chroot and reset path into our new fs
 	unix.Chroot(newroot)
 	unix.Chdir("/")
 
-	log.Println("proc", syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""))
-	defer unix.Unmount("/proc", unix.MNT_DETACH)
-	log.Println("sysfs", syscall.Mount("sysfs", "/sys", "sysfs", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""))
-	defer unix.Unmount("/sys", unix.MNT_DETACH)
-	log.Println("run", syscall.Mount("tmpfs", "/run", "tmpfs", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""))
-	defer unix.Unmount("/run", unix.MNT_DETACH)
+	// Bring live utility mounts in
+	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
+		defer unix.Unmount("/proc", unix.MNT_DETACH)
+	}
+	if err := syscall.Mount("sysfs", "/sys", "sysfs", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
+		defer unix.Unmount("/sys", unix.MNT_DETACH)
+	}
+	if err := syscall.Mount("tmpfs", "/run", "tmpfs", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
+		defer unix.Unmount("/run", unix.MNT_DETACH)
+	}
 
 	// Apply seccomp to prevent remounting everything after all our hard work
 	disallowmount()
 
+	// Capture children dying and wait so we dont end up with
+	// a mass of zombies in the new namespace
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGCHLD)
+		for {
+			<-c // iter when we get events
+			for {
+				zom, err := syscall.Wait4(-1, nil, syscall.WNOHANG, nil)
+				if err != nil || zom == 0 {
+					break
+				}
+				syscall.Wait4(zom, nil, 0, nil)
+			}
+		}
+	}()
+
+	// Drop into the subshell with the sudo uid/gid of that user
 	cmd := exec.Command("/bin/bash")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
@@ -191,7 +209,7 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	cmd.Stderr = os.Stderr
 	cmd.Run()
 
-	return newroot
+	return upperdir
 }
 
 // Parse an integer from environ key
@@ -208,7 +226,6 @@ func env_uint64(key string) uint64 {
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	sudo_uid := flag.Uint64("sudo-uid", env_uint64("SUDO_UID"), "UID to become after chroot.")
 	sudo_gid := flag.Uint64("sudo-gid", env_uint64("SUDO_GID"), "GID to become after chroot.")
 	chroot := flag.String("chroot", "", "Path to chroot folder structure.")
@@ -220,9 +237,9 @@ func main() {
 	}
 
 	if *stage2 {
-		log.Println(isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid)))
+		upper := isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid))
+		log.Println("Session ended, changes stored in ", upper)
 	} else {
-		log.Println("Dropping to namespace")
 		drop_to_userns(*chroot, *sudo_uid, *sudo_gid)
 		unix.Unmount(filepath.Join(*chroot, "root"), unix.MNT_DETACH)
 		// lazy try and set ownership after we're done
