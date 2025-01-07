@@ -4,16 +4,15 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	// "runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
-	"io/fs"
 
 	libseccomp "github.com/seccomp/libseccomp-golang"
 	"golang.org/x/sys/unix"
@@ -65,6 +64,7 @@ func disallowmount() {
 	if err != nil {
 		fmt.Printf("Error creating filter: %s\n", err)
 	}
+	filter.SetNoNewPrivsBit(false) // allow sudo inside but still filter mount
 	for _, element := range mount_syscalls {
 		syscallID, err := libseccomp.GetSyscallFromName(element)
 		if err != nil {
