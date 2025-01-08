@@ -13,6 +13,8 @@ Tries to handle the most common use case being run via sudo, but can be run manu
 sudo ./lroot
 # Remain as root inside
 sudo ./lroot -sudo-uid 0
+# Specify where to store the overlay
+sudo ./lroot -chroot .fs
 ```
 
 
