@@ -35,7 +35,7 @@ var bindmountfstypes []string = []string{
 // Read over the namespace mounts looking for known filesystems to bring across
 func read_mountinfo() []string {
 	ret := []string{}
-	f, err := os.Open("/proc/self/mountinfo")
+	f, err := os.Open("/proc/self/mounts")
 	if err != nil {
 		return ret
 	}
@@ -44,8 +44,8 @@ func read_mountinfo() []string {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		parts := strings.Split(scanner.Text(), " ")
-		if len(parts) >= 8 && parts[4] != "/" && slices.Contains(bindmountfstypes, parts[8]) {
-			ret = append(ret, parts[4])
+		if len(parts) >= 2 && parts[1] != "/" && slices.Contains(bindmountfstypes, parts[2]) {
+			ret = append(ret, parts[1])
 		}
 	}
 	return ret
