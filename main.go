@@ -47,6 +47,8 @@ func read_mountinfo() []string {
 	return ret
 }
 
+// Apply seccomp filter to ourselves preventing all the mount related
+// syscalls from functioning
 func disallowmount() {
 	mount_syscalls := []string{
 		"chroot",
@@ -78,9 +80,9 @@ func disallowmount() {
 	filter.Load()
 }
 
-// Reexecute our binary with the parsed args but put the sibling in
+// Re-execute our binary with the parsed args but put the sibling in
 // a new mount namespace
-func drop_to_userns(root string, uid, gid uint64) {
+func drop_to_userns(root string, uid, gid uint64, network bool) {
 	cmd := exec.Command("/proc/self/exe", "--stage2", "-chroot", root,
 		"-sudo-uid", strconv.FormatUint(uid, 10), "-sudo-gid", strconv.FormatUint(gid, 10),
 	)
@@ -94,7 +96,11 @@ func drop_to_userns(root string, uid, gid uint64) {
 			syscall.CLONE_NEWIPC |
 			syscall.CLONE_NEWPID,
 	}
-	cmd.Run()
+	// If we dont want networking, namespace it too
+	if !network {
+		cmd.SysProcAttr.Cloneflags |= syscall.CLONE_NEWNET
+	}
+	must(cmd.Run())
 }
 
 func isolate(root string, sudo_uid, sudo_gid uint32) string {
@@ -200,8 +206,23 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	return upperdir
 }
 
+// Interrogate our effective capabilities for needed privs.
+func has_cap_sys_admin() bool {
+	hdr := unix.CapUserHeader{
+		Version: unix.LINUX_CAPABILITY_VERSION_3,
+		Pid:     0, // 0 means 'ourselves'
+	}
+	var data unix.CapUserData
+	if err := unix.Capget(&hdr, &data); err != nil {
+		log.Println(err)
+		return false
+	}
+
+	return (data.Effective & (1 << unix.CAP_SYS_ADMIN)) != 0
+}
+
 // Parse an integer from environ key
-// Note the int is trucated to uint32 but returns uint64 type for
+// Note the int is truncated to uint32 but returns uint64 type for
 // ease of use in flag.Uint64
 func env_uint64(key string) uint64 {
 	if k := os.Getenv(key); k != "" {
@@ -223,8 +244,13 @@ func main() {
 	sudo_uid := flag.Uint64("sudo-uid", env_uint64("SUDO_UID"), "UID to become after chroot.")
 	sudo_gid := flag.Uint64("sudo-gid", env_uint64("SUDO_GID"), "GID to become after chroot.")
 	chroot := flag.String("chroot", "", "Path to chroot folder structure.")
+	network := flag.Bool("network", true, "Use network namespace.")
 	stage2 := flag.Bool("stage2", false, "internal flag")
 	flag.Parse()
+
+	if !has_cap_sys_admin() {
+		log.Fatal("I dont have CAP_SYS_ADMIN, none of this is going to work.")
+	}
 
 	if *chroot == "" {
 		*chroot, _ = os.MkdirTemp("", "overlay-root-*")
@@ -234,7 +260,7 @@ func main() {
 		upper := isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid))
 		log.Println("Session ended, changes stored in ", upper)
 	} else {
-		drop_to_userns(*chroot, *sudo_uid, *sudo_gid)
+		drop_to_userns(*chroot, *sudo_uid, *sudo_gid, *network)
 		unix.Unmount(filepath.Join(*chroot, "root"), unix.MNT_DETACH)
 		// lazy try and set ownership after we're done
 		filepath.WalkDir(*chroot, func(path string, d fs.DirEntry, err error) error {

@@ -15,6 +15,8 @@ sudo ./lroot
 sudo ./lroot -sudo-uid 0
 # Specify where to store the overlay
 sudo ./lroot -chroot .fs
+# Without any networking
+sudo ./lroot -network=false
 ```
 
 
