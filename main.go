@@ -65,8 +65,8 @@ func disallowmount() {
 		"move_mount",
 		"open_tree",
 		"pivot_root",
-		"umount",
-		"umount2",
+		// "umount",
+		// "umount2",
 	}
 
 	filter, err := libseccomp.NewFilter(libseccomp.ActAllow.SetReturnCode(int16(syscall.EPERM)))
@@ -128,6 +128,12 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	must(unix.FsconfigSetString(fd, "lowerdir", "/"))
 	must(unix.FsconfigSetString(fd, "upperdir", upperdir))
 	must(unix.FsconfigSetString(fd, "workdir", workdir))
+	// Turn off extras to allow lowerdir to change without issues between usage
+	// https://docs.kernel.org/filesystems/overlayfs.html#changes-to-underlying-filesystems
+	must(unix.FsconfigSetString(fd, "xino", "off"))
+	must(unix.FsconfigSetString(fd, "index", "off"))
+	must(unix.FsconfigSetString(fd, "redirect_dir", "off"))
+	must(unix.FsconfigSetString(fd, "metacopy", "off"))
 	must(unix.FsconfigCreate(fd))
 	fsfd, err := unix.Fsmount(fd, unix.FSMOUNT_CLOEXEC, 0)
 	if err != nil {
