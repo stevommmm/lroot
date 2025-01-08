@@ -21,8 +21,10 @@ sudo ./lroot -sudo-uid 0
 Small console capture of an interactive session showing functioning sudo and the caputred filesystem modifications in the overlay filesystem.
 
 ```console
-$ sudo ./lroot 
-$ sudo pacman -S sl
+host$ sudo ./lroot
+namespace$ id
+uid=1000(user) gid=1000(user) groups=1000(user)
+namespace$ sudo pacman -S sl
 [sudo] password for user: 
 resolving dependencies...
 looking for conflicting packages...
@@ -48,7 +50,7 @@ $ exit
 exit
 2025/01/08 10:08:55 Session ended, changes stored in  /tmp/overlay-root-3045213463/up
 
-$ find /tmp/overlay-root-3045213463/up
+host$ find /tmp/overlay-root-3045213463/up
 /tmp/overlay-root-3045213463/up
 /tmp/overlay-root-3045213463/up/etc
 /tmp/overlay-root-3045213463/up/etc/pacman.d
