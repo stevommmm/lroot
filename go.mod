@@ -1,4 +1,4 @@
-module github.com/stevommmm/local
+module github.com/stevommmm/lroot
 
 go 1.23.3
 

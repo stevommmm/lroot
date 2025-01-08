@@ -1,3 +1,5 @@
+//go:build linux
+
 package main
 
 import (
@@ -63,7 +65,7 @@ func disallowmount() {
 
 	filter, err := libseccomp.NewFilter(libseccomp.ActAllow.SetReturnCode(int16(syscall.EPERM)))
 	if err != nil {
-		log.Fatal("Error creating filter: %s\n", err)
+		log.Fatal("Error creating filter:", err)
 	}
 	filter.SetNoNewPrivsBit(false) // allow sudo inside but still filter mount
 	for _, element := range mount_syscalls {
@@ -100,9 +102,9 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	upperdir := filepath.Join(root, "up")
 	workdir := filepath.Join(root, "work")
 
-	_ = os.MkdirAll(newroot, 0755)
-	_ = os.MkdirAll(upperdir, 0755)
-	_ = os.MkdirAll(workdir, 0755)
+	must(os.MkdirAll(newroot, 0755))
+	must(os.MkdirAll(upperdir, 0755))
+	must(os.MkdirAll(workdir, 0755))
 
 	filesystems := read_mountinfo()
 
@@ -112,36 +114,24 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	}
 	defer unix.Close(fd)
 
-	if err := unix.FsconfigSetString(fd, "source", "overlay"); err != nil {
-		log.Fatal(err)
-	}
-	if err := unix.FsconfigSetString(fd, "lowerdir", "/"); err != nil {
-		log.Fatal(err)
-	}
-	if err := unix.FsconfigSetString(fd, "upperdir", upperdir); err != nil {
-		log.Fatal(err)
-	}
-	if err := unix.FsconfigSetString(fd, "workdir", workdir); err != nil {
-		log.Fatal(err)
-	}
-	if err := unix.FsconfigCreate(fd); err != nil {
-		log.Fatal(err)
-	}
+	must(unix.FsconfigSetString(fd, "source", "overlay"))
+	must(unix.FsconfigSetString(fd, "lowerdir", "/"))
+	must(unix.FsconfigSetString(fd, "upperdir", upperdir))
+	must(unix.FsconfigSetString(fd, "workdir", workdir))
+	must(unix.FsconfigCreate(fd))
 	fsfd, err := unix.Fsmount(fd, unix.FSMOUNT_CLOEXEC, 0)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer unix.Close(fsfd)
 
-	if err := unix.MoveMount(fsfd, "", unix.AT_FDCWD, newroot, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
-		log.Fatal(err)
-	}
+	must(unix.MoveMount(fsfd, "", unix.AT_FDCWD, newroot, unix.MOVE_MOUNT_F_EMPTY_PATH))
 	// try cleanup mounts when we exit
 	defer unix.Unmount(newroot, 0)
 
 	for _, fs := range filesystems {
-		os.MkdirAll(filepath.Join(newroot, fs), 0700)
-		
+		_ = os.MkdirAll(filepath.Join(newroot, fs), 0700)
+
 		if err := syscall.Mount(fs, filepath.Join(newroot, fs), "", syscall.MS_BIND, ""); err == nil {
 			// Remount readonly - cant be done in one step for some reason
 			if err := syscall.Mount("", filepath.Join(newroot, fs), "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""); err == nil {
@@ -223,6 +213,12 @@ func env_uint64(key string) uint64 {
 	}
 
 	return 0
+}
+
+func must(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func main() {

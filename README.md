@@ -1,4 +1,4 @@
-# local
+# lroot
 
 Drop into an interactive shell with an overlayed root filesystem with all writes being redirected to a staging location.
 
@@ -10,9 +10,9 @@ Tries to handle the most common use case being run via sudo, but can be run manu
 
 ```bash
 # Rebecome same invocating user account
-sudo ./local
+sudo ./lroot
 # Remain as root inside
-sudo ./local -sudo-uid 0
+sudo ./lroot -sudo-uid 0
 ```
 
 
@@ -21,24 +21,65 @@ sudo ./local -sudo-uid 0
 Small console capture of an interactive session showing functioning sudo and the caputred filesystem modifications in the overlay filesystem.
 
 ```console
-$user> sudo ./local 
-2025/01/07 15:42:40 main.go:226: Dropping to namespace
-2025/01/07 15:42:40 main.go:81: User namespace
-2025/01/07 15:42:40 main.go:105: Overlay: /tmp/overlay-root-928566530
-2025/01/07 15:42:40 main.go:157: dev <nil>
-2025/01/07 15:42:40 main.go:159: devpts <nil>
-2025/01/07 15:42:40 main.go:170: proc <nil>
-2025/01/07 15:42:40 main.go:172: sysfs <nil>
-2025/01/07 15:42:40 main.go:174: run <nil>
-2025/01/07 15:42:40 main.go:77: Blocked mounting with seccomp
-bash: /root/.bashrc: Permission denied
-$user> sudo -i
+$ sudo ./lroot 
+$ sudo pacman -S sl
 [sudo] password for user: 
-$root> exit
-$user> exit
-2025/01/07 15:43:02 main.go:224: /tmp/overlay-root-928566530/root
+resolving dependencies...
+looking for conflicting packages...
 
-$user> find /tmp/overlay-root-928566530/up
-/tmp/overlay-root-928566530/up
-/tmp/overlay-root-928566530/up/root
-/tmp/overlay-root-928566530/up/root/.bash_history
+Packages (1) sl-5.05-5
+
+Total Download Size:   0.01 MiB
+Total Installed Size:  0.02 MiB
+
+:: Proceed with installation? [Y/n] y
+:: Retrieving packages...
+ sl-5.05-5-x86_64              10.1 KiB  80.1 KiB/s 00:00 [###############################] 100%
+(1/1) checking keys in keyring                            [###############################] 100%
+(1/1) checking package integrity                          [###############################] 100%
+(1/1) loading package files                               [###############################] 100%
+(1/1) checking for file conflicts                         [###############################] 100%
+(1/1) checking available disk space                       [###############################] 100%
+:: Processing package changes...
+(1/1) installing sl                                       [###############################] 100%
+:: Running post-transaction hooks...
+(1/1) Arming ConditionNeedsUpdate...
+$ exit
+exit
+2025/01/08 10:08:55 Session ended, changes stored in  /tmp/overlay-root-3045213463/up
+
+$ find /tmp/overlay-root-3045213463/up
+/tmp/overlay-root-3045213463/up
+/tmp/overlay-root-3045213463/up/etc
+/tmp/overlay-root-3045213463/up/etc/pacman.d
+/tmp/overlay-root-3045213463/up/etc/pacman.d/gnupg
+/tmp/overlay-root-3045213463/up/etc/pacman.d/gnupg/trustdb.gpg
+/tmp/overlay-root-3045213463/up/etc/ld.so.cache
+/tmp/overlay-root-3045213463/up/var
+/tmp/overlay-root-3045213463/up/var/log
+/tmp/overlay-root-3045213463/up/var/log/pacman.log
+/tmp/overlay-root-3045213463/up/var/lib
+/tmp/overlay-root-3045213463/up/var/lib/pacman
+/tmp/overlay-root-3045213463/up/var/lib/pacman/local
+/tmp/overlay-root-3045213463/up/var/lib/pacman/local/sl-5.05-5
+/tmp/overlay-root-3045213463/up/var/lib/pacman/local/sl-5.05-5/mtree
+/tmp/overlay-root-3045213463/up/var/lib/pacman/local/sl-5.05-5/desc
+/tmp/overlay-root-3045213463/up/var/lib/pacman/local/sl-5.05-5/files
+/tmp/overlay-root-3045213463/up/var/cache
+/tmp/overlay-root-3045213463/up/var/cache/pacman
+/tmp/overlay-root-3045213463/up/var/cache/pacman/pkg
+/tmp/overlay-root-3045213463/up/var/cache/pacman/pkg/sl-5.05-5-x86_64.pkg.tar.zst
+/tmp/overlay-root-3045213463/up/var/cache/pacman/pkg/sl-5.05-5-x86_64.pkg.tar.zst.sig
+/tmp/overlay-root-3045213463/up/var/cache/ldconfig
+/tmp/overlay-root-3045213463/up/var/cache/ldconfig/aux-cache
+/tmp/overlay-root-3045213463/up/usr
+/tmp/overlay-root-3045213463/up/usr/bin
+/tmp/overlay-root-3045213463/up/usr/bin/sl
+/tmp/overlay-root-3045213463/up/usr/share
+/tmp/overlay-root-3045213463/up/usr/share/licenses
+/tmp/overlay-root-3045213463/up/usr/share/licenses/sl
+/tmp/overlay-root-3045213463/up/usr/share/licenses/sl/LICENSE
+/tmp/overlay-root-3045213463/up/usr/share/man
+/tmp/overlay-root-3045213463/up/usr/share/man/man1
+/tmp/overlay-root-3045213463/up/usr/share/man/man1/sl.1.gz
+```
