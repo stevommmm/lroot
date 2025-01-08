@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +30,7 @@ var bindmountfstypes []string = []string{
 	"zfs",
 	"f2fs",
 	"xfs",
-	"vfat",
+	// "vfat",
 }
 
 // Read over the namespace mounts looking for known filesystems to bring across
@@ -107,16 +108,18 @@ func drop_to_userns(root string, uid, gid uint64, network bool) {
 	must(cmd.Run())
 }
 
-func isolate(root string, sudo_uid, sudo_gid uint32) string {
-	newroot := filepath.Join(root, "root")
-	upperdir := filepath.Join(root, "up")
-	workdir := filepath.Join(root, "work")
+// Mount a specific filesystem to the new location via overlay
+func isolatefs(root, fs string) string {
+	sfs := strings.ReplaceAll(fs, "/", "_")
+	newroot := filepath.Join(root, "root", fs)
+	upperdir := filepath.Join(root, sfs, "up")
+	workdir := filepath.Join(root, sfs, "work")
+
+	log.Println("Mounting", fs, "to", newroot, "/w upper", upperdir)
 
 	must(os.MkdirAll(newroot, 0755))
 	must(os.MkdirAll(upperdir, 0755))
 	must(os.MkdirAll(workdir, 0755))
-
-	filesystems := read_mountinfo()
 
 	fd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {
@@ -125,7 +128,7 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	defer unix.Close(fd)
 
 	must(unix.FsconfigSetString(fd, "source", "overlay"))
-	must(unix.FsconfigSetString(fd, "lowerdir", "/"))
+	must(unix.FsconfigSetString(fd, "lowerdir", fs))
 	must(unix.FsconfigSetString(fd, "upperdir", upperdir))
 	must(unix.FsconfigSetString(fd, "workdir", workdir))
 	// Turn off extras to allow lowerdir to change without issues between usage
@@ -142,18 +145,19 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	defer unix.Close(fsfd)
 
 	must(unix.MoveMount(fsfd, "", unix.AT_FDCWD, newroot, unix.MOVE_MOUNT_F_EMPTY_PATH))
-	// try cleanup mounts when we exit
-	defer unix.Unmount(newroot, 0)
 
+	return newroot
+}
+
+func isolate(root string, sudo_uid, sudo_gid uint32) {
+	filesystems := read_mountinfo()
+	newroot := isolatefs(root, "/")
+	defer unix.Unmount(newroot, unix.MNT_DETACH)
+
+	// Overlay every mounted filesystem into the new root
 	for _, fs := range filesystems {
 		_ = os.MkdirAll(filepath.Join(newroot, fs), 0700)
-
-		if err := syscall.Mount(fs, filepath.Join(newroot, fs), "", syscall.MS_BIND, ""); err == nil {
-			// Remount readonly - cant be done in one step for some reason
-			if err := syscall.Mount("", filepath.Join(newroot, fs), "", syscall.MS_REC|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REMOUNT, ""); err == nil {
-				defer unix.Unmount(filepath.Join(newroot, fs), syscall.MNT_DETACH)
-			}
-		}
+		defer unix.Unmount(isolatefs(root, fs), unix.MNT_DETACH)
 	}
 
 	// Bring in needed devices as binds
@@ -212,8 +216,6 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Run()
-
-	return upperdir
 }
 
 // Interrogate our effective capabilities for needed privs.
@@ -246,7 +248,8 @@ func env_uint64(key string) uint64 {
 
 func must(err error) {
 	if err != nil {
-		log.Fatal(err)
+		_, file, line, _ := runtime.Caller(1)
+		log.Fatalf("FATAL %s:%d %s\n", file, line, err)
 	}
 }
 
@@ -267,8 +270,8 @@ func main() {
 	}
 
 	if *stage2 {
-		upper := isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid))
-		log.Println("Session ended, changes stored in ", upper)
+		isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid))
+		log.Println("Session ended, changes stored in ", *chroot)
 	} else {
 		drop_to_userns(*chroot, *sudo_uid, *sudo_gid, *network)
 		unix.Unmount(filepath.Join(*chroot, "root"), unix.MNT_DETACH)
