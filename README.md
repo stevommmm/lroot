@@ -4,7 +4,7 @@ Drop into an interactive shell with an overlayed root filesystem with all writes
 
 _MUST_ be run as root because of the overlayfs `lowerdir=/`. There might be some way to do it in a user_namespace but I can't work it out.
 
-Seccomp is emplyed to prevent any attempt to use mount syscalls within the isolated shell and undo the work done by overlay to root.
+Seccomp is employed to prevent any attempt to use mount syscalls within the isolated shell and undo the work done by overlay to root.
 
 Tries to handle the most common use case being run via sudo, but can be run manually as root by specifying `-sudo-uid` and `-sudo-gid`.
 
@@ -22,7 +22,7 @@ sudo ./lroot -network=false
 
 # Example use
 
-Small console capture of an interactive session showing functioning sudo and the caputred filesystem modifications in the overlay filesystem.
+Small console capture of an interactive session showing functioning sudo and the captured filesystem modifications in the overlay filesystem.
 
 ```console
 user@host:$ sudo ./lroot
