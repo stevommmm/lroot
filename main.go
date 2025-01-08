@@ -151,6 +151,7 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 	// Chroot and reset path into our new fs
 	unix.Chroot(newroot)
 	unix.Chdir("/")
+	_ = syscall.Sethostname([]byte("namespace"))
 
 	// Bring live utility mounts in
 	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
@@ -191,9 +192,6 @@ func isolate(root string, sudo_uid, sudo_gid uint32) string {
 			Gid: sudo_gid,
 		},
 	}
-	cmd.Env = append(os.Environ(),
-		"PS1=overlay: ",
-	)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
