@@ -25,6 +25,10 @@ var bindmountfstypes []string = []string{
 	"ext3",
 	"ext2",
 	"bcachefs",
+	"btrfs",
+	"zfs",
+	"f2fs",
+	"xfs",
 	"vfat",
 }
 
