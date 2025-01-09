@@ -54,7 +54,7 @@ func read_mountinfo() []string {
 
 // Apply seccomp filter to ourselves preventing all the mount related
 // syscalls from functioning
-func disallowmount() {
+func disallowmount() error {
 	mount_syscalls := []string{
 		"chroot",
 		"fsconfig",
@@ -72,25 +72,29 @@ func disallowmount() {
 
 	filter, err := libseccomp.NewFilter(libseccomp.ActAllow.SetReturnCode(int16(syscall.EPERM)))
 	if err != nil {
-		log.Fatal("Error creating filter:", err)
+		return err
 	}
 	filter.SetNoNewPrivsBit(false) // allow sudo inside but still filter mount
 	for _, element := range mount_syscalls {
 		syscallID, err := libseccomp.GetSyscallFromName(element)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		filter.AddRule(syscallID, libseccomp.ActErrno)
 	}
 	filter.Load()
+	return nil
 }
 
 // Re-execute our binary with the parsed args but put the sibling in
 // a new mount namespace
-func drop_to_userns(root string, uid, gid uint64, network bool) {
+func drop_to_userns(root string, uid, gid uint64, network bool, hidepaths []string) {
 	cmd := exec.Command("/proc/self/exe", "--stage2", "-chroot", root,
 		"-sudo-uid", strconv.FormatUint(uid, 10), "-sudo-gid", strconv.FormatUint(gid, 10),
 	)
+	for _, fp := range hidepaths {
+		cmd.Args = append(cmd.Args, "-hide", fp)
+	}
 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -149,7 +153,7 @@ func isolatefs(root, fs string) string {
 	return newroot
 }
 
-func isolate(root string, sudo_uid, sudo_gid uint32) {
+func isolate(root string, sudo_uid, sudo_gid uint32, hidepaths []string) {
 	filesystems := read_mountinfo()
 	newroot := isolatefs(root, "/")
 	defer unix.Unmount(newroot, unix.MNT_DETACH)
@@ -160,20 +164,17 @@ func isolate(root string, sudo_uid, sudo_gid uint32) {
 		defer unix.Unmount(isolatefs(root, fs), unix.MNT_DETACH)
 	}
 
-	// Bring in needed devices as binds
-	if err := syscall.Mount("/dev", filepath.Join(newroot, "/dev"), "", syscall.MS_BIND, ""); err == nil {
-		defer unix.Unmount("/dev", unix.MNT_DETACH)
-	}
-	if err := syscall.Mount("/dev/pts", filepath.Join(newroot, "/dev/pts"), "", syscall.MS_BIND, ""); err == nil {
-		defer unix.Unmount("/dev/pts", unix.MNT_DETACH)
-	}
-
 	// Chroot and reset path into our new fs
-	unix.Chroot(newroot)
+	// If chroot fails die - we remove files later on expecting to be in the
+	// new root without checking
+	must(unix.Chroot(newroot))
 	unix.Chdir("/")
 	_ = syscall.Sethostname([]byte("namespace"))
 
 	// Bring live utility mounts in
+	if err := syscall.Mount("devtmpfs", "/dev", "devtmpfs", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
+		defer unix.Unmount("/dev", unix.MNT_DETACH)
+	}
 	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
 		defer unix.Unmount("/proc", unix.MNT_DETACH)
 	}
@@ -185,7 +186,7 @@ func isolate(root string, sudo_uid, sudo_gid uint32) {
 	}
 
 	// Apply seccomp to prevent remounting everything after all our hard work
-	disallowmount()
+	must(disallowmount())
 
 	// Capture children dying and wait so we dont end up with
 	// a mass of zombies in the new namespace
@@ -203,6 +204,12 @@ func isolate(root string, sudo_uid, sudo_gid uint32) {
 			}
 		}
 	}()
+
+	// Remove anything we're told to hide after chroot by deleting it
+	// os will make a nice empty character device in the upper layer for us
+	for _, fp := range hidepaths {
+		os.RemoveAll(fp)
+	}
 
 	// Drop into the subshell with the sudo uid/gid of that user
 	cmd := exec.Command("/bin/bash")
@@ -253,13 +260,28 @@ func must(err error) {
 	}
 }
 
+type HiddenPaths []string
+
+func (v *HiddenPaths) String() string {
+	return ""
+}
+
+func (v *HiddenPaths) Set(s string) error {
+	*v = append(*v, s)
+	return nil
+}
+
 func main() {
 	sudo_uid := flag.Uint64("sudo-uid", env_uint64("SUDO_UID"), "UID to become after chroot.")
 	sudo_gid := flag.Uint64("sudo-gid", env_uint64("SUDO_GID"), "GID to become after chroot.")
 	chroot := flag.String("chroot", "", "Path to chroot folder structure.")
 	network := flag.Bool("network", true, "Use network namespace.")
 	stage2 := flag.Bool("stage2", false, "internal flag")
+	hidepaths := make(HiddenPaths, 0)
+	flag.Var(&hidepaths, "hide", "Locations to remove post-chroot.")
 	flag.Parse()
+
+	log.Println(hidepaths)
 
 	if !has_cap_sys_admin() {
 		log.Fatal("I dont have CAP_SYS_ADMIN, none of this is going to work.")
@@ -270,10 +292,10 @@ func main() {
 	}
 
 	if *stage2 {
-		isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid))
+		isolate(*chroot, uint32(*sudo_uid), uint32(*sudo_gid), hidepaths)
 		log.Println("Session ended, changes stored in ", *chroot)
 	} else {
-		drop_to_userns(*chroot, *sudo_uid, *sudo_gid, *network)
+		drop_to_userns(*chroot, *sudo_uid, *sudo_gid, *network, hidepaths)
 		unix.Unmount(filepath.Join(*chroot, "root"), unix.MNT_DETACH)
 		// lazy try and set ownership after we're done
 		filepath.WalkDir(*chroot, func(path string, d fs.DirEntry, err error) error {

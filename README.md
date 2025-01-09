@@ -17,6 +17,8 @@ sudo ./lroot -sudo-uid 0
 sudo ./lroot -chroot .fs
 # Without any networking
 sudo ./lroot -network=false
+# Hiding specific locations inside the namespace
+sudo ./lroot -hide /home/user/.ssh -hide /root/.ssh
 ```
 
 
