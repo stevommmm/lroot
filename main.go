@@ -158,6 +158,12 @@ func isolate(root string, sudo_uid, sudo_gid uint32, hidepaths []string) {
 	newroot := isolatefs(root, "/")
 	defer unix.Unmount(newroot, unix.MNT_DETACH)
 
+	// We dont bring /dev/ across so give namespace some devices
+	must(syscall.Mknod(filepath.Join(newroot, "/dev/null"), syscall.S_IFCHR|0666, int(unix.Mkdev(1, 3))))
+	must(syscall.Mknod(filepath.Join(newroot, "/dev/zero"), syscall.S_IFCHR|0666, int(unix.Mkdev(1, 5))))
+	must(syscall.Mknod(filepath.Join(newroot, "/dev/random"), syscall.S_IFCHR|0666, int(unix.Mkdev(1, 8))))
+	must(syscall.Mknod(filepath.Join(newroot, "/dev/urandom"), syscall.S_IFCHR|0666, int(unix.Mkdev(1, 9))))
+
 	// Overlay every mounted filesystem into the new root
 	for _, fs := range filesystems {
 		_ = os.MkdirAll(filepath.Join(newroot, fs), 0700)
@@ -171,10 +177,6 @@ func isolate(root string, sudo_uid, sudo_gid uint32, hidepaths []string) {
 	unix.Chdir("/")
 	_ = syscall.Sethostname([]byte("namespace"))
 
-	// Bring live utility mounts in
-	if err := syscall.Mount("devtmpfs", "/dev", "devtmpfs", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
-		defer unix.Unmount("/dev", unix.MNT_DETACH)
-	}
 	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV, ""); err == nil {
 		defer unix.Unmount("/proc", unix.MNT_DETACH)
 	}
@@ -280,8 +282,6 @@ func main() {
 	hidepaths := make(HiddenPaths, 0)
 	flag.Var(&hidepaths, "hide", "Locations to remove post-chroot.")
 	flag.Parse()
-
-	log.Println(hidepaths)
 
 	if !has_cap_sys_admin() {
 		log.Fatal("I dont have CAP_SYS_ADMIN, none of this is going to work.")
