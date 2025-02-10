@@ -17,8 +17,8 @@ sudo ./lroot -sudo-uid 0
 sudo ./lroot -chroot .fs
 # Without any networking
 sudo ./lroot -network=false
-# Hiding specific locations inside the namespace
-sudo ./lroot -hide /home/user/.ssh -hide /root/.ssh
+# Pass in wayland sock for UI apps
+sudo ./lroot -pass=/run/user/1000; export XDG_RUNTIME_DIR=/run/user/1000; firefox
 ```
 
 
