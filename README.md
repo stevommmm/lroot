@@ -18,7 +18,7 @@ sudo ./lroot -chroot .fs
 # Without any networking
 sudo ./lroot -network=false
 # Pass in wayland sock for UI apps
-sudo ./lroot -pass=/run/user/1000; export XDG_RUNTIME_DIR=/run/user/1000; firefox
+sudo ./lroot -pass=/run/user/1000; XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 firefox
 ```
 
 
